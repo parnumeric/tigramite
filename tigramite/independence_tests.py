@@ -38,6 +38,8 @@ try:
 except:
     print("Could not import r-package RCIT")
 
+from tigramite import stats as tigramite_stats
+
 @six.add_metaclass(abc.ABCMeta)
 class CondIndTest():
     """Base class of conditional independence tests.
@@ -1103,7 +1105,7 @@ class ParCorr(CondIndTest):
 
         x_vals = self._get_single_residuals(array, target_var=0)
         y_vals = self._get_single_residuals(array, target_var=1)
-        val, _ = stats.pearsonr(x_vals, y_vals)
+        val, _ = tigramite_stats.pearsonr(x_vals, y_vals)
         return val
 
     def get_shuffle_significance(self, array, xyz, value,
