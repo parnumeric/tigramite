@@ -3,7 +3,6 @@ from __future__ import division, print_function, absolute_import
 import warnings
 import sys
 #import math
-import pycuda
 if sys.version_info.major >= 3 and sys.version_info.minor >= 5:
     from math import gcd
 else:
@@ -12,6 +11,13 @@ else:
 import numpy as np
 import scipy.special as special
 from scipy import linalg
+
+import pycuda
+import pycuda.autoinit
+import pycuda.compiler
+from pycuda import gpuarray
+from pycuda import driver
+from skcuda import cublas
 
 __all__ = ['find_repeats', 'gmean', 'hmean', 'mode', 'tmean', 'tvar',
            'tmin', 'tmax', 'tstd', 'tsem', 'moment', 'variation',
@@ -217,3 +223,58 @@ def pearsonr(x, y):
     prob = 2*special.btdtr(ab, ab, 0.5*(1 - abs(np.float64(r))))
 
     return r, prob
+
+###############################################################################
+def pearson_cuda(X, Y):
+    # Check some preconditions to verify we're doing something sensical.
+    # Doesn't cover all cases, but catches obvious mistakes.
+    assert len(X[0]) == len(X[1]), 'Your sequences in X should all be the same length.'
+    assert len(Y[0]) == len(Y[1]), 'Your sequences in Y should all be the same length.'
+    assert len(X[0]) == len(Y[0]), 'Your sequences in X and Y should all be the same length.'
+
+    n = len(X)
+    m = len(Y)
+    p = len(X[0])
+
+    # standardize
+    X -= X.mean(axis=1).reshape(n, 1)
+    X /= X.std(axis=1).reshape(n, 1)
+    Y -= Y.mean(axis=1).reshape(m, 1)
+    Y /= Y.std(axis=1).reshape(m, 1)
+
+    # Create a zero-initialized chunk of memory for the per-thread buckets and copy it to the GPU.
+    matrix = np.zeros(shape=(m, n), dtype=np.float32, order='F')
+    v = np.zeros(shape=(1, n), dtype=np.float32, order='F')
+    vector_gpu = gpuarray.to_gpu(v)
+
+    # set up values for CuBLAS context
+    alpha = 1.0 / p # Why??????????????????????
+    beta = 0.0
+    trans = cublas._CUBLAS_OP['N']
+    lda = n
+    incx = 1
+    incy = 1
+
+    # Prepare input matrices for GPU.
+    XT = X.T.copy()
+    A_gpu = gpuarray.to_gpu(XT)
+
+    handle = cublas.cublasCreate()
+    for i in range(m):
+        x = Y[i]
+        x_gpu = gpuarray.to_gpu(x)
+        cublas.cublasSgemv(handle, trans, n, p, alpha,
+                           A_gpu.gpudata, lda,
+                           x_gpu.gpudata, incx, beta,
+                           vector_gpu.gpudata, incy)
+        vector_gpu.get(matrix[i])
+
+        progress = i * 100.0 / m
+        sys.stdout.write('\rComputing correlations %.2f%% ' % progress)
+        sys.stdout.flush()
+
+    print('\rComputing correlations 100.000%          ')
+
+    cublas.cublasDestroy(handle)
+
+    return matrix#, merged

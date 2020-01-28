@@ -54,17 +54,17 @@ def my_method(data, maxlags=1, correct_pvalues=True):
 
     # tp.plot_timeseries(dataframe)
 
-    parcorr = ParCorr(significance='analytic')
+    parcorr = ParCorr(significance='analytic', verbosity=1)
     pcmci = PCMCI(
         dataframe=dataframe,
         cond_ind_test=parcorr,
-        verbosity=1)
+        verbosity=2)
 
     # correlations = pcmci.get_lagged_dependencies(tau_max=maxlags)
     # lag_func_matrix = tp.plot_lagfuncs(val_matrix=correlations, setup_args={'var_names': var_names,
     #                                                                        'x_base': 5, 'y_base': .5})
 
-    pcmci.verbosity = 1
+    # pcmci.verbosity = 1
     results = pcmci.run_pcmci(tau_max=maxlags, pc_alpha=None)
     values = results['val_matrix']
     pvalues = results['p_matrix']
@@ -149,7 +149,7 @@ if __name__ == '__main__':
     method_name = 'varmodel-python'
 
     # The only parameter here is the maximum time lag
-    maxlags = 10
+    maxlags = 3
 
     #################################################
     # Experiment details
@@ -158,7 +158,7 @@ if __name__ == '__main__':
     results['model'] = 'linear-VAR'
 
     # Here we choose the setup with N=3 variables and time series length T=150
-    experimental_setup = 'N-10_T-300'
+    experimental_setup = 'N-3_T-150'
     results['experiment'] = results['model'] + '_' + experimental_setup
 
     name = '%s_0200.txt' % results['experiment']

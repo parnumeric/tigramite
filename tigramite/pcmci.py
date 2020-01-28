@@ -357,6 +357,26 @@ class PCMCI():
         for cond in itertools.combinations(all_parents_excl_current, conds_dim):
             yield list(cond)
 
+    def _iter_conditions_all(self, conds_dim, all_parents):
+        """Yield next condition.
+
+        Yields next condition from lexicographically ordered conditions.
+
+        Parameters
+        ----------
+        conds_dim : int
+            Cardinality in current step.
+        all_parents : list
+            List of form [(0, -1), (3, -2), ...]
+
+        Returns
+        -------
+        cond :  list
+            List of form [(0, -1), (3, -2), ...] for the next condition.
+        """
+        for cond in itertools.combinations(all_parents, conds_dim):
+            yield list(cond)
+
     def _sort_parents(self, parents_vals):
         """Sort current parents according to test statistic values.
 
@@ -648,6 +668,158 @@ class PCMCI():
                 'p_max':p_max,
                 'iterations': _nested_to_normal(iterations)}
 
+    def _run_pc_stable_single_cuda(self, j,
+                                   selected_links=None,
+                                   tau_min=1,
+                                   tau_max=1,
+                                   save_iterations=False,
+                                   pc_alpha=0.2,
+                                   max_conds_dim=None,
+                                   max_combinations=1):
+        """PC algorithm for estimating parents of single variable.
+
+        Parameters
+        ----------
+        j : int
+            Variable index.
+
+        selected_links : list, optional (default: None)
+            List of form [(0, -1), (3, -2), ...]
+            specifying whether only selected links should be tested. If None is
+            passed, all links are tested
+
+        tau_min : int, optional (default: 1)
+            Minimum time lag to test. Useful for variable selection in
+            multi-step ahead predictions. Must be greater zero.
+
+        tau_max : int, optional (default: 1)
+            Maximum time lag. Must be larger or equal to tau_min.
+
+        save_iterations : bool, optional (default: False)
+            Whether to save iteration step results such as conditions used.
+
+        pc_alpha : float or None, optional (default: 0.2)
+            Significance level in algorithm. If a list is given, pc_alpha is
+            optimized using model selection criteria provided in the
+            cond_ind_test class as get_model_selection_criterion(). If None,
+            a default list of values is used.
+
+        max_conds_dim : int, optional (default: None)
+            Maximum number of conditions to test. If None is passed, this number
+            is unrestricted.
+
+        max_combinations : int, optional (default: 1)
+            Maximum number of combinations of conditions of current cardinality
+            to test. Defaults to 1 for PC_1 algorithm. For original PC algorithm
+            a larger number, such as 10, can be used.
+
+        Returns
+        -------
+        parents : list
+            List of estimated parents.
+
+        val_min : dict
+            Dictionary of form {(0, -1):float, ...} containing the minimum test
+            statistic value of a link.
+
+        p_max : dict
+            Dictionary of form {(0, -1):float, ...} containing the maximum
+            p-value of a link across different conditions.
+
+        iterations : dict
+            Dictionary containing further information on algorithm steps.
+        """
+        # Initialize the dictionaries for the p_max, val_min parents_values
+        # results
+        p_max = dict()
+        val_min = dict()
+        parents_values = dict()
+        # Initialize the parents values from the selected links, copying to
+        # ensure this initial argument is unchagned.
+        parents = deepcopy(selected_links)
+        # Define a nested defaultdict of depth 4 to save all information about
+        # iterations
+        iterations = _create_nested_dictionary(4)
+        # Ensure tau_min is atleast 1
+        tau_min = max(1, tau_min)
+
+        # Loop over all possible condition dimentions
+        max_conds_dim = self._set_max_condition_dim(max_conds_dim,
+                                                    tau_min, tau_max)
+        # Iteration through increasing number of conditions, i.e. from
+        # [0,max_conds_dim] inclusive
+        converged = False
+        for conds_dim in range(max_conds_dim+1):
+            # (Re)initialize the list of non-significant links
+            nonsig_parents = list()
+            # Check if the algorithm has converged
+            if len(parents) - 1 < conds_dim:
+                converged = True
+                break
+            # Print information about
+            if self.verbosity > 1:
+                print("\nTesting condition sets of dimension %d:" % conds_dim)
+
+            # Print info about this link
+            if self.verbosity > 1:
+                # Iterate through all possible pairs (that have not converged yet)
+                for index_parent, parent in enumerate(parents):
+                    self._print_link_info(j, index_parent, parent, len(parents))
+
+            # Iterate through all possible combinations
+            for comb_index, Z in enumerate(self._iter_conditions_all(conds_dim, parents)):
+                # # Break if we try too many combinations
+#                 if comb_index >= max_combinations+1:
+#                     break
+                parent_list = [parent for parent in parents if parent not in Z]
+                # Perform independence test
+                val, pval = self.cond_ind_test.run_test_cuda(X=parent_list,
+                                                             Y=[(j, 0)],
+                                                             Z=Z,
+                                                             tau_max=tau_max)
+                for idx, p in enumerate(parent_list):
+                    # Print some information if needed
+                    if self.verbosity > 1:
+                        self._print_cond_info(Z, comb_index, pval[idx], val[idx])
+                    # Keep track of maximum p-value and minimum estimated value
+                    # for each pair (across any condition)
+                    parents_values[p] = min(np.abs(val[idx]), parents_values.get(p, float("inf")))
+                    p_max[p] = max(np.abs(pval[idx]), p_max.get(p, -float("inf")))
+                    val_min[p] = min(np.abs(val[idx]), val_min.get(p, float("inf")))
+                    # Save the iteration if we need to
+                    if save_iterations:
+                        a_iter = iterations['iterations'][conds_dim][p]
+                        a_iter[comb_index]['conds'] = deepcopy(Z)
+                        a_iter[comb_index]['val'] = val[idx]
+                        a_iter[comb_index]['pval'] = pval[idx]
+                    # Delete link later and break while-loop if non-significant
+                    if pval[idx] > pc_alpha:
+                        nonsig_parents.append((j, p))
+                        # Print the results if needed
+                        if self.verbosity > 1:
+                            self._print_a_pc_result(pval[idx], pc_alpha, conds_dim, max_combinations)
+
+            # Remove non-significant links
+            for _, parent in nonsig_parents:
+                if parent in parents_values:
+                    del parents_values[parent]
+            # Return the parents list sorted by the test metric so that the
+            # updated parents list is given to the next cond_dim loop
+            parents = self._sort_parents(parents_values)
+            # Print information about the change in possible parents
+            if self.verbosity > 1:
+                print("\nUpdating parents:")
+                self._print_parents_single(j, parents, parents_values, p_max)
+
+        # Print information about if convergence was reached
+        if self.verbosity > 1:
+            self._print_converged_pc_single(converged, j, max_conds_dim)
+        # Return the results
+        return {'parents':parents,
+                'val_min':val_min,
+                'p_max':p_max,
+                'iterations': _nested_to_normal(iterations)}
+
     def _print_pc_params(self, selected_links, tau_min, tau_max, pc_alpha,
                          max_conds_dim, max_combinations):
         """
@@ -884,7 +1056,7 @@ class PCMCI():
                                                           score.shape[0]))
                 # Get the results for this alpha value
                 results[pc_alpha_here] = \
-                    self._run_pc_stable_single(j,
+                    self._run_pc_stable_single_cuda(j,
                                                selected_links=_int_sel_links[j],
                                                tau_min=tau_min,
                                                tau_max=tau_max,
