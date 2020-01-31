@@ -349,16 +349,23 @@ class CondIndTest():
         return val, pval
 
     def run_test_cuda(self, X, Y, Z=None, tau_max=0, cut_off='2xtau_max'):
-        T, N = self.values.shape
-        dim = len(X)
+        # np.set_printoptions(precision=8)
+
+        # Get the length in time and the number of nodes
+        T, _ = self.dataframe.values.shape
+
+        N = len(X)
         max_lag = 2 * tau_max
         time_length = T - max_lag
-        X_vals = np.zeros((dim, time_length), dtype=self.values.dtype)
+        x_vals = np.zeros((N, time_length), dtype=self.dataframe.values.dtype)
+        val = np.zeros((N), dtype=self.dataframe.values.dtype)
+        # y_vals = np.zeros((1, time_length), dtype=self.dataframe.values.dtype)
         # Get the y array to test on
         array, xyz, XYZ = self._get_array([X[0]], Y, Z, tau_max, cut_off)
         y_vals = self._get_single_residuals(array, target_var=1)
         val_list = list()
         pval_list = list()
+
         for i, parent in enumerate(X):
             # Get the x array to test on
             array, xyz, XYZ = self._get_array([parent], Y, Z, tau_max, cut_off)
@@ -367,18 +374,24 @@ class CondIndTest():
             if np.isnan(array).sum() != 0:
                 raise ValueError("nans in the array!")
             # Return the dependence measure on the array and xyz
-            X_vals[i] = self._get_single_residuals(array, target_var=0)
-            # val, _ = tigramite_stats.pearsonr(x_vals, y_vals)
-            # val_list.append(val)
-        Val = tigramite_stats.pearson_cuda(X_vals, y_vals)
+            x_vals[i] = self._get_single_residuals(array, target_var=0)
+            # val[i], _ = stats.pearsonr(x_vals[i], y_vals)
+            # print(f'val[{i}]={val[i]}')
+# Using tigramite_stats.pearson_cuda()
+        val = tigramite_stats.pearson_cuda(x_vals, y_vals).reshape(N)
+        # print(val)
+        # raise(ValueError("Dmitry has killed the program"))
         for i, parent in enumerate(X):
-            val_list.append(Val[i])
+            # size = len(x_vals[i])
+            # cuda_column = tigramite_stats.pearson_cuda(x_vals[i].reshape(1,size), y_vals)
+            # print(f'cuda_column={cuda_column}')
+            val_list.append(val[i])
             # Get the array to test on
             array, xyz, XYZ = self._get_array([parent], Y, Z, tau_max, cut_off)
             # Record the dimensions
             dim, T = array.shape
             # Get the p-value
-            pval = self.get_significance(Val[i], array, xyz, T, dim)
+            pval = self.get_significance(val[i], array, xyz, T, dim)
             pval_list.append(pval)
         return val_list, pval_list
 
@@ -1139,13 +1152,7 @@ class ParCorr(CondIndTest):
 
         x_vals = self._get_single_residuals(array, target_var=0)
         y_vals = self._get_single_residuals(array, target_var=1)
-        val, _ = tigramite_stats.pearsonr(x_vals, y_vals)
-        return val
-        # build array and call _get_single_residuals on the whole array matrix
-        #array = ...
-        for i in range(len(X)):
-            X_vals[i] = self._get_single_residuals(array, target_var=0)
-        val, _ = tigramite_stats.pearson_cublas(X_vals, y_vals)
+        val, _ = stats.pearsonr(x_vals, y_vals)
         return val
 
     def get_shuffle_significance(self, array, xyz, value,

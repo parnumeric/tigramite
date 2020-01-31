@@ -744,8 +744,7 @@ class PCMCI():
         tau_min = max(1, tau_min)
 
         # Loop over all possible condition dimentions
-        max_conds_dim = self._set_max_condition_dim(max_conds_dim,
-                                                    tau_min, tau_max)
+        max_conds_dim = self._set_max_condition_dim(max_conds_dim, tau_min, tau_max)
         # Iteration through increasing number of conditions, i.e. from
         # [0,max_conds_dim] inclusive
         converged = False
