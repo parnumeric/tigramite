@@ -675,8 +675,9 @@ class PCMCI():
                                    save_iterations=False,
                                    pc_alpha=0.2,
                                    max_conds_dim=None,
-                                   max_combinations=1):
-        """PC algorithm for estimating parents of single variable.
+                                   max_combinations=1,
+                                   mode='none'):
+        """PC algorithm for estimating parents of single variable (CUDA version).
 
         Parameters
         ----------
@@ -744,13 +745,19 @@ class PCMCI():
         tau_min = max(1, tau_min)
 
         # Loop over all possible condition dimentions
-        max_conds_dim = self._set_max_condition_dim(max_conds_dim, tau_min, tau_max)
+        max_conds_dim = self._set_max_condition_dim(max_conds_dim,
+                                                    tau_min, tau_max)
         # Iteration through increasing number of conditions, i.e. from
         # [0,max_conds_dim] inclusive
         converged = False
         for conds_dim in range(max_conds_dim+1):
             # (Re)initialize the list of non-significant links
             nonsig_parents = list()
+            # (Re)initialize the dict of parents to count combinations
+            combinations = dict()
+            for _, parent in enumerate(parents):
+                combinations[parent] = 0
+
             # Check if the algorithm has converged
             if len(parents) - 1 < conds_dim:
                 converged = True
@@ -766,37 +773,59 @@ class PCMCI():
                     self._print_link_info(j, index_parent, parent, len(parents))
 
             # Iterate through all possible combinations
-            for comb_index, Z in enumerate(self._iter_conditions_all(conds_dim, parents)):
-                # # Break if we try too many combinations
-#                 if comb_index >= max_combinations+1:
-#                     break
+            for comb_index, Z in \
+                enumerate(self._iter_conditions_all(conds_dim,
+                                                    parents)):
+                # Break if we try too many combinations
+                # # if comb_index >= max_combinations+1:
+                # # if Z[0][0] > max_combinations + conds_dim:
+                if all([combinations[key] >= max_combinations+1 for key in combinations]):
+                    break
+
                 parent_list = [parent for parent in parents if parent not in Z]
                 # Perform independence test
                 val, pval = self.cond_ind_test.run_test_cuda(X=parent_list,
                                                              Y=[(j, 0)],
                                                              Z=Z,
-                                                             tau_max=tau_max)
-                for idx, p in enumerate(parent_list):
+                                                             tau_max=tau_max,
+                                                             mode=mode)
+                # val = list()
+                # pval = list()
+                # for idx, parent in enumerate(parent_list):
+                #     val.append(0)
+                #     pval.append(0)
+                #     val[idx], pval[idx] = self.cond_ind_test.run_test(X=[parent],
+                #                                                       Y=[(j, 0)],
+                #                                                       Z=Z,
+                #                                                       tau_max=tau_max)
+                for idx, parent in enumerate(parent_list):
+                    combinations[parent] += 1
+
                     # Print some information if needed
                     if self.verbosity > 1:
                         self._print_cond_info(Z, comb_index, pval[idx], val[idx])
                     # Keep track of maximum p-value and minimum estimated value
                     # for each pair (across any condition)
-                    parents_values[p] = min(np.abs(val[idx]), parents_values.get(p, float("inf")))
-                    p_max[p] = max(np.abs(pval[idx]), p_max.get(p, -float("inf")))
-                    val_min[p] = min(np.abs(val[idx]), val_min.get(p, float("inf")))
+                    parents_values[parent] = \
+                        min(np.abs(val[idx]), parents_values.get(parent,
+                                                                 float("inf")))
+                    p_max[parent] = \
+                        max(np.abs(pval[idx]), p_max.get(parent, -float("inf")))
+                    val_min[parent] = \
+                        min(np.abs(val[idx]), val_min.get(parent, float("inf")))
                     # Save the iteration if we need to
                     if save_iterations:
-                        a_iter = iterations['iterations'][conds_dim][p]
+                        a_iter = iterations['iterations'][conds_dim][parent]
                         a_iter[comb_index]['conds'] = deepcopy(Z)
                         a_iter[comb_index]['val'] = val[idx]
                         a_iter[comb_index]['pval'] = pval[idx]
                     # Delete link later and break while-loop if non-significant
                     if pval[idx] > pc_alpha:
-                        nonsig_parents.append((j, p))
-                        # Print the results if needed
-                        if self.verbosity > 1:
-                            self._print_a_pc_result(pval[idx], pc_alpha, conds_dim, max_combinations)
+                        nonsig_parents.append((j, parent))
+                    # Print the results if needed
+                    if self.verbosity > 1:
+                        self._print_a_pc_result(pval[idx], pc_alpha,
+                                                conds_dim, max_combinations)
 
             # Remove non-significant links
             for _, parent in nonsig_parents:
@@ -929,7 +958,8 @@ class PCMCI():
                       save_iterations=False,
                       pc_alpha=0.2,
                       max_conds_dim=None,
-                      max_combinations=1):
+                      max_combinations=1,
+                      mode='none'):
         """PC algorithm for estimating parents of all variables.
 
         Parents are made available as self.all_parents
@@ -965,6 +995,9 @@ class PCMCI():
             Maximum number of combinations of conditions of current cardinality
             to test. Defaults to 1 for PC_1 algorithm. For original PC algorithm
             a larger number, such as 10, can be used.
+
+        mode : string, default: 'none'
+            Computing on CPU (default) or GPU ('cuda').
 
         Returns
         -------
@@ -1054,15 +1087,27 @@ class PCMCI():
                                                           iscore+1,
                                                           score.shape[0]))
                 # Get the results for this alpha value
-                results[pc_alpha_here] = \
-                    self._run_pc_stable_single_cuda(j,
-                                               selected_links=_int_sel_links[j],
-                                               tau_min=tau_min,
-                                               tau_max=tau_max,
-                                               save_iterations=save_iterations,
-                                               pc_alpha=pc_alpha_here,
-                                               max_conds_dim=max_conds_dim,
-                                               max_combinations=max_combinations)
+                if mode in ['cuda', 'cublasDgemv', 'cublasDgemm']:
+                    results[pc_alpha_here] = \
+                        self._run_pc_stable_single_cuda(j,
+                                                selected_links=_int_sel_links[j],
+                                                tau_min=tau_min,
+                                                tau_max=tau_max,
+                                                save_iterations=save_iterations,
+                                                pc_alpha=pc_alpha_here,
+                                                max_conds_dim=max_conds_dim,
+                                                max_combinations=max_combinations,
+                                                mode=mode)
+                else:
+                    results[pc_alpha_here] = \
+                        self._run_pc_stable_single(j,
+                                                selected_links=_int_sel_links[j],
+                                                tau_min=tau_min,
+                                                tau_max=tau_max,
+                                                save_iterations=save_iterations,
+                                                pc_alpha=pc_alpha_here,
+                                                max_conds_dim=max_conds_dim,
+                                                max_combinations=max_combinations)
                 # Figure out the best score if there is more than one pc_alpha
                 # value
                 if select_optimal_alpha:
@@ -1873,7 +1918,8 @@ class PCMCI():
                   max_combinations=1,
                   max_conds_py=None,
                   max_conds_px=None,
-                  fdr_method='none'):
+                  fdr_method='none',
+                  mode='none'):
         """Run full PCMCI causal discovery for time series datasets.
 
         Wrapper around PC-algorithm function and MCI function.
@@ -1918,6 +1964,9 @@ class PCMCI():
             Correction method, default is Benjamini-Hochberg False Discovery
             Rate method.
 
+        mode : string, default: 'none'
+            Computing on CPU (default) or GPU ('cuda').
+
         Returns
         -------
         results : dictionary of arrays of shape [N, N, tau_max+1]
@@ -1932,7 +1981,8 @@ class PCMCI():
                                          save_iterations=save_iterations,
                                          pc_alpha=pc_alpha,
                                          max_conds_dim=max_conds_dim,
-                                         max_combinations=max_combinations)
+                                         max_combinations=max_combinations,
+                                         mode=mode)
         # Get the results from run_mci, using the parents as the input
         results = self.run_mci(selected_links=selected_links,
                                tau_min=tau_min,

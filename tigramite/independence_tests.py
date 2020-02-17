@@ -348,7 +348,8 @@ class CondIndTest():
         # Return the value and the pvalue
         return val, pval
 
-    def run_test_cuda(self, X, Y, Z=None, tau_max=0, cut_off='2xtau_max'):
+    def run_test_cuda(self, X, Y, Z=None, tau_max=0, cut_off='2xtau_max',
+                      mode='cuda'): # 'cuda', 'cublasDgemv', 'cublasDgemm'
         # np.set_printoptions(precision=8)
 
         # Get the length in time and the number of nodes
@@ -375,16 +376,9 @@ class CondIndTest():
                 raise ValueError("nans in the array!")
             # Return the dependence measure on the array and xyz
             x_vals[i] = self._get_single_residuals(array, target_var=0)
-            # val[i], _ = stats.pearsonr(x_vals[i], y_vals)
-            # print(f'val[{i}]={val[i]}')
 # Using tigramite_stats.pearson_cuda()
-        val = tigramite_stats.pearson_cuda(x_vals, y_vals).reshape(N)
-        # print(val)
-        # raise(ValueError("Dmitry has killed the program"))
+        val = tigramite_stats.pearson_cuda(x_vals, y_vals, mode).reshape(N)
         for i, parent in enumerate(X):
-            # size = len(x_vals[i])
-            # cuda_column = tigramite_stats.pearson_cuda(x_vals[i].reshape(1,size), y_vals)
-            # print(f'cuda_column={cuda_column}')
             val_list.append(val[i])
             # Get the array to test on
             array, xyz, XYZ = self._get_array([parent], Y, Z, tau_max, cut_off)
