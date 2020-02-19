@@ -376,7 +376,9 @@ class CondIndTest():
                 raise ValueError("nans in the array!")
             # Return the dependence measure on the array and xyz
             x_vals[i] = self._get_single_residuals(array, target_var=0)
+            # val[i], _ = stats.pearsonr(x_vals[i], y_vals)
 # Using tigramite_stats.pearson_cuda()
+        # print("Calculating...")
         val = tigramite_stats.pearson_cuda(x_vals, y_vals, mode).reshape(N)
         for i, parent in enumerate(X):
             val_list.append(val[i])
@@ -1114,6 +1116,9 @@ class ParCorr(CondIndTest):
         if dim_z > 0:
             z = np.fastCopyAndTranspose(array[2:, :])
             beta_hat = np.linalg.lstsq(z, y, rcond=None)[0]
+            beta_kv = tigramite_stats.lstsq(z, y)
+            print(f'beta_hat(np)={beta_hat}')
+            print(f'beta_hat(kv)={beta_kv}')
             mean = np.dot(z, beta_hat)
             resid = y - mean
         else:

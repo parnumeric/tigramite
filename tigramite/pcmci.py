@@ -1087,7 +1087,7 @@ class PCMCI():
                                                           iscore+1,
                                                           score.shape[0]))
                 # Get the results for this alpha value
-                if mode in ['cuda', 'cublasDgemv', 'cublasDgemm']:
+                if mode in ['none', 'af', 'gpu', 'cublasDgemv', 'cublasDgemm']:
                     results[pc_alpha_here] = \
                         self._run_pc_stable_single_cuda(j,
                                                 selected_links=_int_sel_links[j],
