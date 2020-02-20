@@ -1116,9 +1116,9 @@ class ParCorr(CondIndTest):
         if dim_z > 0:
             z = np.fastCopyAndTranspose(array[2:, :])
             beta_hat = np.linalg.lstsq(z, y, rcond=None)[0]
-            beta_kv = tigramite_stats.lstsq(z, y)
-            print(f'beta_hat(np)={beta_hat}')
-            print(f'beta_hat(kv)={beta_kv}')
+            # beta_kv = tigramite_stats.lstsq(z, y)
+            # print(f'beta_hat(np)={beta_hat}')
+            # print(f'beta_hat(kv)={beta_kv}')
             mean = np.dot(z, beta_hat)
             resid = y - mean
         else:
