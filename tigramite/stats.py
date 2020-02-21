@@ -22,31 +22,49 @@ from khiva.statistics import *
 from khiva.array import Array
 
 ###############################################################################
-def lstsq(X, Y, mode='none'):
+def lstsq_af(X, Y, mode='none'):
     # n = len(X)
     # m = len(Y)
-    # print(X.shape)
-    # print(Y.shape)
-    # X = X.reshape(X.shape[0], 1)
-    # Y = Y.reshape(Y.shape[0], 1)
-    X_af = af.Array(X.ctypes.data, X.shape, X.dtype.char)
-    Y_af = af.Array(Y.ctypes.data, (Y.shape[0],1), Y.dtype.char)
-    if X_af.numdims() > 1:
+    # X = X.reshape(X.shape[0], -1)
+    # Y = Y.reshape(Y.shape[0], -1)
+
+    # A = np.zeros(shape=(X.shape[0], X.shape[1]))
+    # if Y.ndim==1:
+    #     Yshape1 = 1
+    # else:
+    #     Yshape1 = Y.shape[1]
+    # B = np.zeros(shape=(Y.shape[0], Yshape1))
+    # print(A.shape)
+    # print(B.shape)
+    # A[:,0] = X[0]
+    # if Y.ndim==1:
+    #     B[:,0] = Y
+    # else:
+    #     B[:,0] = Y[:,0]
+    A = X
+    B = Y
+
+    # XT = np.fastCopyAndTranspose(X)
+    # X_af = af.constant(0, X.shape[0], 1)
+    # Y_af = af.constant(0, Y.shape[0], 1)
+    A_af = af.Array(A.ctypes.data, A.shape, A.dtype.char)
+    B_af = af.Array(B.ctypes.data, B.shape, B.dtype.char)
+    # A_af = af.transpose(A_af)
+    # B_af = af.transpose(B_af)
+    # if X_af.numdims() > 1:
     #     print(X_af.dims()[1])
-        Y_af = af.tile(Y_af, 1, X_af.dims()[1])
-        # Y_af = af.moddims(Y_af, Y_af.dims()[0], 1)
+        # Y_af = af.tile(Y_af, 1, X_af.dims()[1])
     # if Y_af.numdims() == 1:
     #     Y_af = af.moddims(X_af, 1, )
-    print(X_af.dims())
-    print(Y_af.dims())
+    print(f'ArrayFire shapes: {A_af.dims()}, {B_af.dims()}')
     # af.display(X_af)
-    af.display(Y_af)
+    # af.display(Y_af)
     # X_kv = Array(X)
     # Y_kv = Array(Y)
-    X_kv = Array.from_arrayfire(X_af)
-    Y_kv = Array.from_arrayfire(Y_af)
-    print(X_kv.get_dims())
-    print(Y_kv.get_dims())
+    # X_kv = Array.from_arrayfire(X_af)
+    # Y_kv = Array.from_arrayfire(Y_af)
+    # print(X_kv.get_dims())
+    # print(Y_kv.get_dims())
 
     # # Create the correlation matrix and buckets.
     # matrix = np.zeros(shape=(n, m), dtype=np.float32, order='C')#
@@ -55,11 +73,33 @@ def lstsq(X, Y, mode='none'):
     # numCol = X.dims()[1]
 
     # result_af = biogpu.correlation.pearson_af(X_af, Y_af)
-    slope_kv, intercept, rvalue, pvalue, stderrest = kv.regression.linear(X_kv, Y_kv)
-    slope = slope_kv.transpose().to_numpy()
+    # slope_kv, intercept, rvalue, pvalue, stderrest = kv.regression.linear(X_kv, Y_kv)
+    # slope = slope_kv.transpose().to_numpy()
 
-    return slope
+    # P = af.lu_inplace(A_af)
+    # Beta = af.solve_lu(A_af, P, B_af)
+    Beta = af.solve(A_af, B_af)
+    beta = Beta.to_ndarray()
 
+    return beta
+
+###############################################################################
+def my_print(Y_af):
+    print("Welcome")
+
+###############################################################################
+# def _lstsq(a, b):
+#     # u, s, vt
+#     u, s, vt = af.svd(a)
+#     if a.numdims()>1:
+#         dims = a.dims()[1]
+#     else:
+#         dims = 1
+#     s_pinv = af.constant(0, a.dims()[0], dims)
+#     for i in range(s.dims()[0]):
+#         s_pinv[i, i] = 1. / s[i]
+#     s_pinv[af.isinf(s_pinv)] = 0
+#     return af.matmul(af.matmul(af.matmul(vt.T, s_pinv.T), u.T), b)
 
 ###############################################################################
 def pearson_cuda(X, Y, mode='none'):

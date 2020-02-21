@@ -39,6 +39,8 @@ except:
     print("Could not import r-package RCIT")
 
 from tigramite import stats as tigramite_stats
+from sklearn.linear_model import LinearRegression
+
 
 @six.add_metaclass(abc.ABCMeta)
 class CondIndTest():
@@ -299,6 +301,25 @@ class CondIndTest():
                                               cut_off=cut_off,
                                               verbosity=verbosity)
 
+    def _get_array_gpu(self, X, Z, tau_max=0, cut_off='2xtau_max', verbosity=None):
+        """Convencience wrapper around _construct_array."""
+        # Set the verbosity to the default value
+        if verbosity is None:
+            verbosity=self.verbosity
+
+        if self.measure in ['par_corr']:
+            if len(X) > 1:
+                raise ValueError("X for %s must be univariate." %
+                                        self.measure)
+        # Call the wrapped function
+        return self.dataframe.construct_array_gpu(X=X, Z=Z,
+                                              tau_max=tau_max,
+                                              mask_type=self.mask_type,
+                                              return_cleaned_xz=True,
+                                              do_checks=False,
+                                              cut_off=cut_off,
+                                              verbosity=verbosity)
+
     def run_test(self, X, Y, Z=None, tau_max=0, cut_off='2xtau_max'):
         """Perform conditional independence test.
 
@@ -345,6 +366,22 @@ class CondIndTest():
         val = self._get_dependence_measure_recycle(X, Y, Z, xyz, array)
         # Get the p-value
         pval = self.get_significance(val, array, xyz, T, dim)
+        # Return the value and the pvalue
+        return val, pval
+
+    def run_test_gpu(self, X, Z=None, tau_max=0, cut_off='2xtau_max'):
+        # Get the array to test on
+        array, xz, XZ, max_lag = self._get_array_gpu(X, Z, tau_max, cut_off)
+        X, Z = XZ
+        # Record the dimensions
+        dim, T = array.shape
+        # Ensure it is a valid array
+        if np.isnan(array).sum() != 0:
+            raise ValueError("nans in the array!")
+        # Get the dependence measure, reycling residuals if need be
+        val = self._get_dependence_measure_recycle_gpu(X, Z, xz, array, max_lag)
+        # Get the p-value
+        pval = self.get_significance_gpu(val, array, xz, T, dim, max_lag)
         # Return the value and the pvalue
         return val, pval
 
@@ -482,6 +519,20 @@ class CondIndTest():
             return self.get_dependence_measure(array_resid, xyz_resid)
         # If not, return the dependence measure on the array and xyz
         return self.get_dependence_measure(array, xyz)
+
+    def _get_dependence_measure_recycle_gpu(self, X, Z, xz, array, max_lag):
+        # # Check if we are recycling residuals
+        # if self.recycle_residuals:
+        #     # Get or calculate the cached residuals
+        #     x_resid = self._get_cached_residuals(X, Z, array, 0)
+        #     y_resid = self._get_cached_residuals(Y, Z, array, 1)
+        #     # Make a new residual array
+        #     array_resid = np.array([x_resid, y_resid])
+        #     xyz_resid = np.array([0, 1])
+        #     # Return the dependence measure
+        #     return self.get_dependence_measure(array_resid, xyz_resid)
+        # If not, return the dependence measure on the array and xyz
+        return self.get_dependence_measure_gpu(array, xz, max_lag)
 
     def _get_cached_residuals(self, x_nodes, z_nodes, array, target_var):
         """
@@ -1115,10 +1166,17 @@ class ParCorr(CondIndTest):
 
         if dim_z > 0:
             z = np.fastCopyAndTranspose(array[2:, :])
-            beta_hat = np.linalg.lstsq(z, y, rcond=None)[0]
-            # beta_kv = tigramite_stats.lstsq(z, y)
-            # print(f'beta_hat(np)={beta_hat}')
-            # print(f'beta_hat(kv)={beta_kv}')
+            # zT = np.fastCopyAndTranspose(z)
+            print(f'NumPy shapes: {z.shape}, {y.shape}')
+            beta = np.linalg.lstsq(z, y, rcond=None)
+            beta_hat = beta[0]
+            beta_lr = LinearRegression().fit(z, y)
+            beta_af = tigramite_stats.lstsq_af(z, y)
+            print(f'COEFFS(NUMPY)={beta}')
+            print(f'COEFFS(SKLEARN)={beta_lr.coef_}')
+            print(f'COEFFS(ARRAYFIRE)={beta_af}')
+            print()
+            # print('slope:', beta_lr.coef_)
             mean = np.dot(z, beta_hat)
             resid = y - mean
         else:
@@ -1128,6 +1186,31 @@ class ParCorr(CondIndTest):
         if return_means:
             return (resid, mean)
         return resid
+
+    def get_dependence_measure_gpu(self, array, xz):
+        """Return partial correlation.
+
+        Estimated as the Pearson correlation of the residuals of a linear
+        OLS regression.
+
+        Parameters
+        ----------
+        array : array-like
+            data array with X, Y, Z in rows and observations in columns
+
+        xyz : array of ints
+            XYZ identifier array of shape (dim,).
+
+        Returns
+        -------
+        val : float
+            Partial correlation coefficient.
+        """
+
+        x_vals = self._get_single_residuals(array, target_var=0)
+        y_vals = self._get_single_residuals(array, target_var=1)
+        val, _ = stats.pearsonr(x_vals, y_vals)
+        return val
 
     def get_dependence_measure(self, array, xyz):
         """Return partial correlation.

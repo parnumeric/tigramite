@@ -11,6 +11,7 @@ import copy
 import numpy as np
 import scipy.sparse
 import scipy.sparse.linalg
+import arrayfire as af
 
 class DataFrame():
     """Data object containing time series array and optional mask.
@@ -49,6 +50,7 @@ class DataFrame():
     def __init__(self, data, mask=None, missing_flag=None, var_names=None,
         datatime=None):
 
+        # dataT = data.T.copy()
         self.values = data
         self.mask = mask
         self.missing_flag = missing_flag
@@ -73,6 +75,9 @@ class DataFrame():
         # if np.isnan(data).sum() != 0:
         #     raise ValueError("NaNs in the data")
         self._check_mask()
+
+        dataT = data.T.copy()
+        self.values_af = af.Array(dataT.ctypes.data, data.shape, data.dtype.char)
 
     def _check_mask(self, mask=None, require_mask=False):
         """Checks that the mask is:
@@ -186,7 +191,7 @@ class DataFrame():
         XYZ = X + Y + Z
         dim = len(XYZ)
 
-        # Ensure that XYZ makes sense
+        # # Ensure that XYZ makes sense
         if do_checks:
             self._check_nodes(Y, XYZ, N, dim)
 
@@ -194,9 +199,9 @@ class DataFrame():
         if cut_off == '2xtau_max':
             max_lag = 2*tau_max
         elif cut_off == 'max_lag':
-            max_lag = abs(np.array(XYZ)[:, 1].min())
+            max_lag = abs(np.array(XZ)[:, 1].min())
         elif cut_off == 'max_lag_or_tau_max':
-            max_lag = max(abs(np.array(XYZ)[:, 1].min()), tau_max)
+            max_lag = max(abs(np.array(XZ)[:, 1].min()), tau_max)
         else:
             raise ValueError("max_lag must be in {'2xtau_max', 'max_lag', 'max_lag_or_tau_max'}")
 
@@ -268,6 +273,67 @@ class DataFrame():
         if return_cleaned_xyz:
             return array, xyz, (X, Y, Z)
         return array, xyz
+
+    def construct_array_gpu(self, X, Z, tau_max,
+                        mask=None,
+                        mask_type=None,
+                        return_cleaned_xz=False,
+                        do_checks=True,
+                        cut_off='2xtau_max',
+                        verbosity=0):
+        # Get the length in time and the number of nodes
+        T, N = self.values.shape
+
+        # If a node in Z occurs already in X or Y, remove it from Z
+        # Z = [node for node in Z if (node not in X) and (node not in Y)]
+        Z = [node for node in Z if (node not in X)]
+
+        # Check that all lags are non-positive and indices are in [0,N-1]
+        XZ = X  + Z
+        dim = len(XZ)
+        XZ = X + Z
+
+        # # Ensure that XYZ makes sense
+        # if do_checks:
+        #     self._check_nodes(Y, XYZ, N, dim)
+
+        # Figure out what cut off we will be using
+        if cut_off == '2xtau_max':
+            max_lag = 2*tau_max
+        elif cut_off == 'max_lag':
+            max_lag = abs(np.array(XZ)[:, 1].min())
+        elif cut_off == 'max_lag_or_tau_max':
+            max_lag = max(abs(np.array(XZ)[:, 1].min()), tau_max)
+        else:
+            raise ValueError("max_lag must be in {'2xtau_max', 'max_lag', 'max_lag_or_tau_max'}")
+
+
+        # Setup XZ identifier
+        index_code = {'x' : 0,
+                    #   'y' : 1,
+                      'z' : 2}
+        xz = np.array([index_code[name]
+                        for var, name in zip([X, Z], ['x', 'z'])
+                        for _ in var])
+
+        # Setup and fill array with lagged time series
+        time_length = T - max_lag
+        array = np.zeros((dim, time_length), dtype=self.values.dtype)
+        # # array_af = af.constant(0.0, time_length, dim, dtype=af.Dtype.f64) #Y.dims()[1]
+        # # X_af = af.constant(0.0, time_length, 1, dtype=af.Dtype.f64) #Y.dims()[1]
+        # # Y_af = af.constant(0.0, time_length, 1, dtype=af.Dtype.f64) #Y.dims()[1]
+        # Note, lags are negative here
+        for i, (var, lag) in enumerate(XZ):
+            array[i, :] = self.values[max_lag + lag:T + lag, var]
+            # array[i, :] = self.values_af[max_lag + lag:T + lag, var].to_ndarray()
+        # #     array_af[:, i] = self.values_af[max_lag + lag:T + lag, var]
+        # # X_af[:] = array_af[:, 0]
+        # # Y_af[:] = array_af[:, 1]
+
+        # Return the array and xyz and optionally (X, Y, Z)
+        if return_cleaned_xz:
+            return array, xz, (X, Z), max_lag
+        return array, xz, max_lag
 
     def _check_nodes(self, Y, XYZ, N, dim):
         """

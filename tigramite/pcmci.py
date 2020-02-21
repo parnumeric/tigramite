@@ -10,6 +10,9 @@ from collections import defaultdict
 from copy import deepcopy
 import numpy as np
 
+import arrayfire as af
+from tigramite import stats as tigramite_stats
+
 def _create_nested_dictionary(depth=0, lowest_type=dict):
     """Create a series of nested dictionaries to a maximum depth.  The first
     depth - 1 nested dictionaries are defaultdicts, the last is a normal
@@ -254,6 +257,8 @@ class PCMCI():
         # Set the selected variables
         self.selected_variables = \
             self._set_selected_variables(selected_variables)
+
+        self.data_af = dataframe.values_af
 
     def _set_selected_variables(self, selected_variables):
         """Helper function to set and check the selected variables argument
@@ -1069,6 +1074,20 @@ class PCMCI():
         max_conds_dim = self._set_max_condition_dim(max_conds_dim,
                                                     tau_min, tau_max)
 
+        Y_dim = self.data_af.dims()[1]
+        for jj in af.ParallelRange(Y_dim):
+            Y_af = self.data_af[jj]
+            y_af = Y_af.to_ndarray()
+            print(y_af.shape)
+            val = af.constant(0.0, 1, Y_dim)
+            pval = af.constant(0.0, 1, Y_dim)
+            tigramite_stats.my_print(Y_af)
+            # val, pval = self.cond_ind_test.run_test_gpu(X=[parent],
+            #                                         jj,
+            #                                         Z=Z,
+            #                                         tau_max=tau_max)
+            
+            # print(Y_af.)
         # Loop through the selected variables
         for j in self.selected_variables:
             # Print the status of this variable
