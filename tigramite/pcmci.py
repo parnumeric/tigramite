@@ -10,6 +10,10 @@ from collections import defaultdict
 from copy import deepcopy
 import numpy as np
 
+import arrayfire as af
+
+import time
+
 def _create_nested_dictionary(depth=0, lowest_type=dict):
     """Create a series of nested dictionaries to a maximum depth.  The first
     depth - 1 nested dictionaries are defaultdicts, the last is a normal
@@ -491,7 +495,7 @@ class PCMCI():
                 "\nAlgorithm not yet converged, but max_conds_dim = %d"
                 " reached." % max_conds_dim)
 
-    def _run_pc_stable_single(self, j,
+    def _run_pc_stable_single(self, j, p_max, val_min, parents_values, parents, iterations, nonsig_parents,
                               selected_links=None,
                               tau_min=1,
                               tau_max=1,
@@ -552,31 +556,37 @@ class PCMCI():
         iterations : dict
             Dictionary containing further information on algorithm steps.
         """
-        # Initialize the dictionaries for the p_max, val_min parents_values
-        # results
-        p_max = dict()
-        val_min = dict()
-        parents_values = dict()
-        # Initialize the parents values from the selected links, copying to
-        # ensure this initial argument is unchagned.
-        parents = deepcopy(selected_links)
-        # Define a nested defaultdict of depth 4 to save all information about
-        # iterations
-        iterations = _create_nested_dictionary(4)
-        # Ensure tau_min is atleast 1
-        tau_min = max(1, tau_min)
+        # # Initialize the dictionaries for the p_max, val_min parents_values
+        # # results
+        # p_max[j] = dict()
+        # val_min[j] = dict()
+        # parents_values[j] = dict()
+        # # Initialize the parents values from the selected links, copying to
+        # # ensure this initial argument is unchagned.
+        # parents[j] = deepcopy(selected_links)
+        # # Define a nested defaultdict of depth 4 to save all information about
+        # # iterations
+        # iterations[j] = _create_nested_dictionary(4)
+        # # Ensure tau_min is atleast 1
+        # tau_min = max(1, tau_min)
 
-        # Loop over all possible condition dimentions
-        max_conds_dim = self._set_max_condition_dim(max_conds_dim,
-                                                    tau_min, tau_max)
+        # # Loop over all possible condition dimentions
+        # max_conds_dim = self._set_max_condition_dim(max_conds_dim,
+        #                                             tau_min, tau_max)
         # Iteration through increasing number of conditions, i.e. from 
         # [0,max_conds_dim] inclusive
         converged = False
         for conds_dim in range(max_conds_dim+1):
+            # Xbig = af.constant(0,1,1)
+            # Ybig = af.constant(0,1,1)
+            # Zbig = af.constant(0,1,1)
+            Xbig = af.constant(0,1,1)
+            Ybig = af.constant(0,1,1)
+            Zbig = af.constant(0,1,1)
             # (Re)initialize the list of non-significant links
-            nonsig_parents = list()
+            nonsig_parents[j] = list()
             # Check if the algorithm has converged
-            if len(parents) - 1 < conds_dim:
+            if len(parents[j]) - 1 < conds_dim:
                 converged = True
                 break
             # Print information about
@@ -584,43 +594,115 @@ class PCMCI():
                 print("\nTesting condition sets of dimension %d:" % conds_dim)
 
             # Iterate through all possible pairs (that have not converged yet)
-            for index_parent, parent in enumerate(parents):
+            for index_parent, parent in enumerate(parents[j]):
                 # Print info about this link
                 if self.verbosity > 1:
-                    self._print_link_info(j, index_parent, parent, len(parents))
+                    self._print_link_info(j, index_parent, parent, len(parents[j]))
                 # Iterate through all possible combinations
                 for comb_index, Z in \
                         enumerate(self._iter_conditions(parent, conds_dim,
-                                                        parents)):
+                                                        parents[j])):
                     # Break if we try too many combinations
                     if comb_index >= max_combinations:
                         break
+                    # # Get the array to test on
+                    # X=[parent]
+                    # Y=[(j, 0)]
+                    # cut_off='2xtau_max'
+                    # array, xyz, XYZ, enum_XYZ[j] = self.cond_ind_test._get_array(X, Y, Z, tau_max, cut_off)
+                    # X, Y, Z = XYZ
+                    # # Record the dimensions
+                    # dim, T = array.shape
+                    # # Ensure it is a valid array
+                    # if np.isnan(array).sum() != 0:
+                    #     raise ValueError("nans in the array!")
+                    # # Get the dependence measure, reycling residuals if need be
+                    # val = self.cond_ind_test._get_dependence_measure_recycle(X, Y, Z, xyz, array)
+                    # # Get the p-value
+                    # pval = self.cond_ind_test.get_significance(val, array, xyz, T, dim)
                     # Perform independence test
-                    val, pval = self.cond_ind_test.run_test(X=[parent],
+                    val, pval, array = self.cond_ind_test.run_test(X=[parent],
                                                             Y=[(j, 0)],
                                                             Z=Z,
                                                             tau_max=tau_max)
+
+                    dim, T = array.shape
+                    X_af = af.constant(0.0, T, 1)
+                    Y_af = af.constant(0.0, T, 1)
+                    X_af[:, 0] = af.Array(array[0, :].ctypes.data, array[0, :].T.shape, array[0, :].dtype.char)
+                    Y_af[:, 0] = af.Array(array[1, :].ctypes.data, array[1, :].T.shape, array[1, :].dtype.char)
+                    Z_af = af.constant(0,T,1)
+                    if Zbig.elements() == 1:
+                        Zbig = Z_af.copy()
+                    if dim>2:
+                        Z_af = af.Array(array[2:, :].ctypes.data, array[2:, :].T.shape, array[2:, :].dtype.char)
+                        # print(Z_af.is_empty)
+                    # standardize(X_af, Y_af, Z_af)
+                    X_af -= af.tile(af.mean(X_af, dim=0), X_af.shape[0])
+                    normXm = af.norm(X_af)
+                    X_af /= normXm
+                    Y_af -= af.tile(af.mean(Y_af, dim=0), Y_af.shape[0])
+                    normYm = af.norm(Y_af)
+                    Y_af /= normYm
+                    if conds_dim > 0:
+                        Z_af -= af.tile(af.mean(Z_af, dim=0), Z_af.shape[0])
+                        # z_af = Z_af.to_ndarray()
+                        for i in range(conds_dim):
+                            normZm = af.norm(Z_af[:,i])
+                            Z_af[:,i] /= normZm
+                        if Xbig.elements() == 1:
+                            Xbig = X_af.copy()
+                        else:
+                            Xbig = af.join(0, Xbig, X_af)
+                        if Ybig.elements() == 1:
+                            Ybig = Y_af.copy()
+                        else:
+                            Ybig = af.join(0, Ybig, Y_af)
+                        # Zconst1 = af.constant(0, Zbig.dims()[0], conds_dim)
+                        Zbig = af.join(1, Zbig, af.constant(0, Zbig.dims()[0], conds_dim))
+                        # Zconst2 = af.constant(0, Z_af.dims()[0], Zbig.dims()[1])
+                        Zbig = af.join(0, Zbig, af.constant(0, Z_af.dims()[0], Zbig.dims()[1]))
+                        # print(f'Z_af.shape, Zbig.shape (after): {Z_af.shape}, {Zbig.shape}')
+                        Zbig[-Z_af.dims()[0]:, -conds_dim:] += Z_af
+                        # if Zbig.shape[1] < 4:
+                        #     z_af = Z_af.to_ndarray()
+                        #     zbig = Zbig.to_ndarray()
+                        #     print(f'z_af: {z_af}')
+                        #     print(f'zbig: {zbig}')
+                    else:
+                        if Xbig.elements() == 1:
+                            Xbig = X_af.copy()
+                        else:
+                            # print(f'X_af.shape, Xbig (before): {X_af.shape}, {Xbig.shape}')
+                            Xbig = af.join(1, Xbig, X_af)
+                            # print(Xbig.shape)
+                            # print(f'X_af.shape, Xbig (after): {X_af.shape}, {Xbig.shape}')
+                        if Ybig.elements() == 1:
+                            Ybig = Y_af.copy()
+                        else:
+                            Ybig = af.join(1, Ybig, Y_af)
+
                     # Print some information if needed
                     if self.verbosity > 1:
                         self._print_cond_info(Z, comb_index, pval, val)
                     # Keep track of maximum p-value and minimum estimated value
                     # for each pair (across any condition)
-                    parents_values[parent] = \
-                        min(np.abs(val), parents_values.get(parent,
+                    parents_values[j][parent] = \
+                        min(np.abs(val), parents_values[j].get(parent,
                                                             float("inf")))
-                    p_max[parent] = \
-                        max(np.abs(pval), p_max.get(parent, -float("inf")))
-                    val_min[parent] = \
-                        min(np.abs(val), val_min.get(parent, float("inf")))
+                    p_max[j][parent] = \
+                        max(np.abs(pval), p_max[j].get(parent, -float("inf")))
+                    val_min[j][parent] = \
+                        min(np.abs(val), val_min[j].get(parent, float("inf")))
                     # Save the iteration if we need to
                     if save_iterations:
-                        a_iter = iterations['iterations'][conds_dim][parent]
-                        a_iter[comb_index]['conds'] = deepcopy(Z)
-                        a_iter[comb_index]['val'] = val
-                        a_iter[comb_index]['pval'] = pval
+                        a_iter = iterations[j]['iterations'][conds_dim][parent]
+                        a_iter[j][comb_index]['conds'] = deepcopy(Z)
+                        a_iter[j][comb_index]['val'] = val
+                        a_iter[j][comb_index]['pval'] = pval
                     # Delete link later and break while-loop if non-significant
                     if pval > pc_alpha:
-                        nonsig_parents.append((j, parent))
+                        nonsig_parents[j].append((j, parent))
                         break
 
                 # Print the results if needed
@@ -628,25 +710,49 @@ class PCMCI():
                     self._print_a_pc_result(pval, pc_alpha,
                                             conds_dim, max_combinations)
 
+            # # # Perform all independence tests at once
+            ## val, pval = self.cond_ind_test.run_all_tests(X_af,
+            ##                                              Y_af,
+            ##                                              Z_af,
+            ##                                              tau_max=tau_max)
+
+            if conds_dim > 0:
+                Zbig = Zbig[-Xbig.dims()[0]:,1:]
+                # print(Zbig.to_ndarray()[:10])
+                print(f'Zbig.shape, Xbig.shape, Ybig.shape = {Zbig.shape}, {Xbig.shape}, {Ybig.shape}')
+                BetaX = af.solve(Zbig, Xbig)
+                betaX = BetaX.to_ndarray()
+                print(f'betaX = {betaX}')
+                BetaY = af.solve(Zbig, Ybig)
+                betaY = BetaY.to_ndarray()
+                print(f'betaY = {betaY}')
+
+            #     Xvals, Yvals = self.cond_ind_test.solve_lstsq(X_af, Y_af, Z_af)
+            # else:
+            #     Xvals, Yvals = X_big, Y_big
+            # pearsonr_af(Xvals, Yvals)
+            ## Val, _ = self.cond_ind_test.pearsonr_af(Xvals, Yvals)
+            # af.display(Val)
+
             # Remove non-significant links
-            for _, parent in nonsig_parents:
-                del parents_values[parent]
+            for _, parent in nonsig_parents[j]:
+                del parents_values[j][parent]
             # Return the parents list sorted by the test metric so that the
             # updated parents list is given to the next cond_dim loop
-            parents = self._sort_parents(parents_values)
+            parents[j] = self._sort_parents(parents_values[j])
             # Print information about the change in possible parents
             if self.verbosity > 1:
                 print("\nUpdating parents:")
-                self._print_parents_single(j, parents, parents_values, p_max)
+                self._print_parents_single(j, parents[j], parents_values[j], p_max[j])
 
         # Print information about if convergence was reached
         if self.verbosity > 1:
             self._print_converged_pc_single(converged, j, max_conds_dim)
         # Return the results
-        return {'parents':parents,
-                'val_min':val_min,
-                'p_max':p_max,
-                'iterations': _nested_to_normal(iterations)}
+        return {'parents':parents[j],
+                'val_min':val_min[j],
+                'p_max':p_max[j],
+                'iterations': _nested_to_normal(iterations[j])}
 
     def _print_pc_params(self, selected_links, tau_min, tau_max, pc_alpha,
                          max_conds_dim, max_combinations):
@@ -865,6 +971,23 @@ class PCMCI():
         max_conds_dim = self._set_max_condition_dim(max_conds_dim,
                                                     tau_min, tau_max)
 
+        len_selected_variables = len(self.selected_variables)
+        score = list(range(len_selected_variables))
+        results = list(range(len_selected_variables))
+        p_max_list = list(range(len_selected_variables))
+        val_min_list = list(range(len_selected_variables))
+        parents_values_list = list(range(len_selected_variables))
+        parents_list = list(range(len_selected_variables))
+        iterations_list = list(range(len_selected_variables))
+        nonsig_parents = list(range(len_selected_variables))
+        # enum_XYZ = list(range(len_selected_variables))
+        for j in self.selected_variables:
+            p_max_list[j] = dict()
+            val_min_list[j] = dict()
+            parents_values_list[j] = dict()
+            parents_list[j] = deepcopy(_int_sel_links[j])
+            iterations_list[j] = _create_nested_dictionary(4)
+        
         # Loop through the selected variables
         for j in self.selected_variables:
             # Print the status of this variable
@@ -873,43 +996,56 @@ class PCMCI():
                 if self.verbosity > 1:
                     print("\nIterating through pc_alpha = %s:" % _int_pc_alpha)
             # Initialize the scores for selecting the optimal alpha
-            score = np.zeros_like(_int_pc_alpha)
+            score[j] = np.zeros_like(_int_pc_alpha)
             # Initialize the result
-            results = {}
-            for iscore, pc_alpha_here in enumerate(_int_pc_alpha):
-                # Print statement about the pc_alpha being tested
-                if self.verbosity > 1:
-                    print("\n# pc_alpha = %s (%d/%d):" % (pc_alpha_here,
-                                                          iscore+1,
-                                                          score.shape[0]))
-                # Get the results for this alpha value
-                results[pc_alpha_here] = \
-                    self._run_pc_stable_single(j,
-                                               selected_links=_int_sel_links[j],
-                                               tau_min=tau_min,
-                                               tau_max=tau_max,
-                                               save_iterations=save_iterations,
-                                               pc_alpha=pc_alpha_here,
-                                               max_conds_dim=max_conds_dim,
-                                               max_combinations=max_combinations)
-                # Figure out the best score if there is more than one pc_alpha
-                # value
-                if select_optimal_alpha:
-                    score[iscore] = \
-                        self.cond_ind_test.get_model_selection_criterion(
-                            j, results[pc_alpha_here]['parents'], tau_max)
+            results[j] = {}
+
+            iscore = 0
+            pc_alpha_here = _int_pc_alpha[0]
+            
+            # for iscore, pc_alpha_here in enumerate(_int_pc_alpha):
+            # Print statement about the pc_alpha being tested
+            if self.verbosity > 1:
+                print("\n# pc_alpha = %s (%d/%d):" % (pc_alpha_here,
+                                                        iscore+1,
+                                                        score[j].shape[0]))
+
+            # Ensure tau_min is atleast 1
+            tau_min_1 = max(1, tau_min)
+            # Loop over all possible condition dimentions
+            max_conds_dim_1 = self._set_max_condition_dim(max_conds_dim,
+                                                        tau_min_1, tau_max)
+
+            # Get the results for this alpha value
+            results[j][pc_alpha_here] = \
+                self._run_pc_stable_single(j, p_max_list, val_min_list, parents_values_list, parents_list, iterations_list, nonsig_parents,
+                                            selected_links=parents_list[j],
+                                            tau_min=tau_min_1,
+                                            tau_max=tau_max,
+                                            save_iterations=save_iterations,
+                                            pc_alpha=pc_alpha_here,
+                                            max_conds_dim=max_conds_dim_1,
+                                            max_combinations=max_combinations)
+                # # Figure out the best score if there is more than one pc_alpha
+                # # value
+                # if select_optimal_alpha:
+                #     score[iscore] = \
+                #         self.cond_ind_test.get_model_selection_criterion(
+                #             j, results[pc_alpha_here]['parents'], tau_max)
+        # Loop through the selected variables
+        for j in self.selected_variables:
             # Record the optimal alpha value
-            optimal_alpha = _int_pc_alpha[score.argmin()]
+            optimal_alpha = _int_pc_alpha[score[j].argmin()]
             # Only print the selection results if there is more than one
             # pc_alpha
             if self.verbosity > 1 and select_optimal_alpha:
-                self._print_pc_sel_results(_int_pc_alpha, results, j,
-                                           score, optimal_alpha)
+                self._print_pc_sel_results(_int_pc_alpha, results[j], j,
+                                           score[j], optimal_alpha)
             # Record the results for this variable
-            all_parents[j] = results[optimal_alpha]['parents']
-            val_min[j] = results[optimal_alpha]['val_min']
-            p_max[j] = results[optimal_alpha]['p_max']
-            iterations[j] = results[optimal_alpha]['iterations']
+            all_parents[j] = results[j][optimal_alpha]['parents']
+            val_min[j] = results[j][optimal_alpha]['val_min']
+            p_max[j] = results[j][optimal_alpha]['p_max']
+            iterations[j] = results[j][optimal_alpha]['iterations']
             # Only save the optimal alpha if there is more than one pc_alpha
             if select_optimal_alpha:
                 iterations[j]['optimal_pc_alpha'] = optimal_alpha
@@ -1271,7 +1407,7 @@ class PCMCI():
             X = [(i, tau)]
             Y = [(j, 0)]
             # Run the independence tests and record the results
-            val, pval = self.cond_ind_test.run_test(X, Y, Z=Z, tau_max=tau_max)
+            val, pval, array = self.cond_ind_test.run_test(X, Y, Z=Z, tau_max=tau_max)
             val_matrix[i, j, abs(tau)] = val
             p_matrix[i, j, abs(tau)] = pval
             # Get the confidance value, returns None if cond_ind_test.confidance
@@ -1754,6 +1890,7 @@ class PCMCI():
             and optionally q_matrix and conf_matrix which is of shape
             [N, N, tau_max+1,2]
         """
+        time_start = time.time()
         # Get the parents from run_pc_stable
         all_parents = self.run_pc_stable(selected_links=selected_links,
                                          tau_min=tau_min,
@@ -1762,6 +1899,10 @@ class PCMCI():
                                          pc_alpha=pc_alpha,
                                          max_conds_dim=max_conds_dim,
                                          max_combinations=max_combinations)
+        time_end = time.time()
+        time_time = time_end - time_start
+        print('run_pc_stable(): computed in %f seconds.\n' % time_time)
+        time_start = time.time()
         # Get the results from run_mci, using the parents as the input
         results = self.run_mci(selected_links=selected_links,
                                tau_min=tau_min,
@@ -1769,6 +1910,9 @@ class PCMCI():
                                parents=all_parents,
                                max_conds_py=max_conds_py,
                                max_conds_px=max_conds_px)
+        time_end = time.time()
+        time_time = time_end - time_start
+        print('run_mci(): computed in %f seconds.\n' % time_time)
         # Get the values and p-values
         val_matrix = results['val_matrix']
         p_matrix = results['p_matrix']

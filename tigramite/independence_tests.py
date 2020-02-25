@@ -38,6 +38,10 @@ try:
 except:
     print("Could not import r-package RCIT")
 
+import arrayfire as af
+from tigramite import stats as tigramite_stats
+from sklearn.linear_model import LinearRegression
+
 @six.add_metaclass(abc.ABCMeta)
 class CondIndTest():
     """Base class of conditional independence tests.
@@ -344,7 +348,7 @@ class CondIndTest():
         # Get the p-value
         pval = self.get_significance(val, array, xyz, T, dim)
         # Return the value and the pvalue
-        return val, pval
+        return val, pval, array
 
     def run_test_raw(self, x, y, z=None):
         """Perform conditional independence test directly on input arrays x, y, z.
@@ -1069,8 +1073,23 @@ class ParCorr(CondIndTest):
         y = array[target_var, :]
 
         if dim_z > 0:
-            z = np.fastCopyAndTranspose(array[2:, :])
-            beta_hat = np.linalg.lstsq(z, y, rcond=None)[0]
+            z0 = array[2:, :]
+            # print(f'NumPy shapes: {z0.shape}, {y.shape}')
+            z = np.fastCopyAndTranspose(z0)
+            beta = np.linalg.lstsq(z, y, rcond=None)
+            beta_hat = beta[0]
+            # Q,R = np.linalg.qr(z)
+            # Qb = np.dot(Q.T,y)
+            # beta_hat = np.linalg.solve(R,Qb)
+            # af_qr = tigramite_stats.lstsq_af(np.fastCopyAndTranspose(R), Qb)
+            # af_hat = tigramite_stats.lstsq_af(z0, y)
+
+            print(f'beta({target_var})={beta_hat}')
+
+            # print(f'COEFFS(QR)={beta_qr}')
+            # print(f'COEFFS(AF_QR)={af_qr}')
+            # print(f'COEFFS(AF)={af_hat}')
+            # print()
             mean = np.dot(z, beta_hat)
             resid = y - mean
         else:
