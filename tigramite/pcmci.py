@@ -9,6 +9,7 @@ import itertools
 from collections import defaultdict
 from copy import deepcopy
 import numpy as np
+from tigramite import stats
 
 import arrayfire as af
 
@@ -258,6 +259,8 @@ class PCMCI():
         # Set the selected variables
         self.selected_variables = \
             self._set_selected_variables(selected_variables)
+        
+        self.time_length = 0
 
     def _set_selected_variables(self, selected_variables):
         """Helper function to set and check the selected variables argument
@@ -621,12 +624,13 @@ class PCMCI():
                     # # Get the p-value
                     # pval = self.cond_ind_test.get_significance(val, array, xyz, T, dim)
                     # Perform independence test
-                    val, pval, array = self.cond_ind_test.run_test(X=[parent],
+                    val, pval, array, xyz = self.cond_ind_test.run_test(X=[parent],
                                                             Y=[(j, 0)],
                                                             Z=Z,
                                                             tau_max=tau_max)
 
                     dim, T = array.shape
+                    self.time_length = T
                     X_af = af.constant(0.0, T, 1)
                     Y_af = af.constant(0.0, T, 1)
                     X_af[:, 0] = af.Array(array[0, :].ctypes.data, array[0, :].T.shape, array[0, :].dtype.char)
@@ -636,7 +640,6 @@ class PCMCI():
                         Zbig = Z_af.copy()
                     if dim>2:
                         Z_af = af.Array(array[2:, :].ctypes.data, array[2:, :].T.shape, array[2:, :].dtype.char)
-                        # print(Z_af.is_empty)
                     # standardize(X_af, Y_af, Z_af)
                     X_af -= af.tile(af.mean(X_af, dim=0), X_af.shape[0])
                     normXm = af.norm(X_af)
@@ -646,7 +649,6 @@ class PCMCI():
                     Y_af /= normYm
                     if conds_dim > 0:
                         Z_af -= af.tile(af.mean(Z_af, dim=0), Z_af.shape[0])
-                        # z_af = Z_af.to_ndarray()
                         for i in range(conds_dim):
                             normZm = af.norm(Z_af[:,i])
                             Z_af[:,i] /= normZm
@@ -658,29 +660,20 @@ class PCMCI():
                             Ybig = Y_af.copy()
                         else:
                             Ybig = af.join(0, Ybig, Y_af)
-                        # Zconst1 = af.constant(0, Zbig.dims()[0], conds_dim)
                         Zbig = af.join(1, Zbig, af.constant(0, Zbig.dims()[0], conds_dim))
-                        # Zconst2 = af.constant(0, Z_af.dims()[0], Zbig.dims()[1])
                         Zbig = af.join(0, Zbig, af.constant(0, Z_af.dims()[0], Zbig.dims()[1]))
-                        # print(f'Z_af.shape, Zbig.shape (after): {Z_af.shape}, {Zbig.shape}')
                         Zbig[-Z_af.dims()[0]:, -conds_dim:] += Z_af
-                        # if Zbig.shape[1] < 4:
-                        #     z_af = Z_af.to_ndarray()
-                        #     zbig = Zbig.to_ndarray()
-                        #     print(f'z_af: {z_af}')
-                        #     print(f'zbig: {zbig}')
                     else:
                         if Xbig.elements() == 1:
                             Xbig = X_af.copy()
                         else:
-                            # print(f'X_af.shape, Xbig (before): {X_af.shape}, {Xbig.shape}')
                             Xbig = af.join(1, Xbig, X_af)
-                            # print(Xbig.shape)
-                            # print(f'X_af.shape, Xbig (after): {X_af.shape}, {Xbig.shape}')
                         if Ybig.elements() == 1:
                             Ybig = Y_af.copy()
                         else:
                             Ybig = af.join(1, Ybig, Y_af)
+
+                    # print(f'Xbig.shape, Ybig.shape, Zbig.shape: {Xbig.shape}, {Ybig.shape}, {Zbig[-Xbig.dims()[0]:,1:].shape}')
 
                     # Print some information if needed
                     if self.verbosity > 1:
@@ -710,22 +703,33 @@ class PCMCI():
                     self._print_a_pc_result(pval, pc_alpha,
                                             conds_dim, max_combinations)
 
-            # # # Perform all independence tests at once
-            ## val, pval = self.cond_ind_test.run_all_tests(X_af,
-            ##                                              Y_af,
-            ##                                              Z_af,
-            ##                                              tau_max=tau_max)
-
+            # print(f'Xbig.shape: {Xbig.shape}')
+            # print(f'Ybig.shape: {Ybig.shape}')
             if conds_dim > 0:
                 Zbig = Zbig[-Xbig.dims()[0]:,1:]
                 # print(Zbig.to_ndarray()[:10])
-                print(f'Zbig.shape, Xbig.shape, Ybig.shape = {Zbig.shape}, {Xbig.shape}, {Ybig.shape}')
                 BetaX = af.solve(Zbig, Xbig)
-                betaX = BetaX.to_ndarray()
-                print(f'betaX = {betaX}')
+                # betaX = BetaX.to_ndarray()
+                # print(f'BetaX.shape, Zbig.shape = {BetaX.shape}, {betaX}')
                 BetaY = af.solve(Zbig, Ybig)
-                betaY = BetaY.to_ndarray()
-                print(f'betaY = {betaY}')
+                # betaY = BetaY.to_ndarray()
+                # print(f'betaY = {betaY}')
+                muXbig = af.matmul(Zbig, BetaX)
+                muYbig = af.matmul(Zbig, BetaY)
+                rXbig = Xbig - muXbig
+                rYbig = Ybig - muYbig
+                rXbig = af.moddims(rXbig, self.time_length, rXbig.dims()[0]//self.time_length)
+                rYbig = af.moddims(rYbig, self.time_length, rYbig.dims()[0]//self.time_length)
+                rX = rXbig[0,:].to_ndarray()
+                rY = rYbig[0,:].to_ndarray()
+                # print(f'rXbig.shape = {rXbig.shape}')
+                # print(f'rYbig.shape = {rYbig.shape}')
+                # print(f'rX = {rX}')
+                # print(f'rY = {rY}')
+                Val = stats.pearson_af(rXbig, rYbig)
+                val = Val.to_ndarray()
+                # print(f'Val = {val}')
+
 
             #     Xvals, Yvals = self.cond_ind_test.solve_lstsq(X_af, Y_af, Z_af)
             # else:
@@ -1240,6 +1244,64 @@ class PCMCI():
                 # Yield these list
                 yield j, i, tau, Z
 
+    def full_iter_indep_conds(self,
+                          parents,
+                          selected_variables,
+                          selected_links,
+                          max_conds_py,
+                          max_conds_px):
+        """Iterate through the conditions dictated by the arguments, yielding
+        the needed arguments for conditional independence functions.
+
+        Parameters
+        ----------
+        parents : dict
+            Dictionary of form {0:[(0, -1), (3, -2), ...], 1:[], ...}
+            specifying the conditions for each variable.
+        selected_variables : list of integers, optional (default: range(N))
+            Specify to estimate parents only for selected variables.
+        selected_links : dict
+            Dictionary of form {0:[(0, -1), (3, -2), ...], 1:[], ...}
+            specifying whether only selected links should be tested.
+        max_conds_py : int
+            Maximum number of conditions of Y to use.
+        max_conds_px : int
+            Maximum number of conditions of Z to use.
+
+        Yields
+        ------
+        i, j, tau, Z : list of tuples
+            (i, tau) is the parent node, (j, 0) is the current node, and Z is of
+            the form [(var, tau + tau')] and specifies the condition to test
+        """
+        iters = []
+        # Loop over the selected variables
+        for j in selected_variables:
+            # Get the conditions for node j
+            conds_y = parents[j][:max_conds_py]
+            # Create a parent list from links seperated in time and by node
+            parent_list = [(i, tau) for i, tau in selected_links[j]
+                           if (i, tau) != (j, 0)]
+            # Iterate through parents (except those in conditions)
+            for cnt, (i, tau) in enumerate(parent_list):
+                # Get the conditions for node i
+                conds_x = parents[i][:max_conds_px]
+                # Shift the conditions for X by tau
+                conds_x_lagged = [(k, tau + k_tau) for k, k_tau in conds_x]
+                # Print information about the mci conditions if requested
+                if self.verbosity > 1:
+                    self._print_mci_conditions(conds_y, conds_x_lagged, j, i,
+                                               tau, cnt, len(parent_list))
+                # Construct lists of tuples for estimating
+                # I(X_t-tau; Y_t | Z^Y_t, Z^X_t-tau)
+                # with conditions for X shifted by tau
+                Z = [node for node in conds_y if node != (i, tau)]
+                # Remove overlapped nodes between conds_x_lagged and conds_y
+                Z += [node for node in conds_x_lagged if node not in Z]
+                # Yield these list
+                iters.append(len(Z))
+        return iters
+
     def get_lagged_dependencies(self,
                                 selected_links=None,
                                 tau_min=0,
@@ -1397,6 +1459,24 @@ class PCMCI():
         if self.cond_ind_test.confidence is not False:
             conf_matrix = np.zeros((self.N, self.N, tau_max + 1, 2))
 
+        full_iter = self.full_iter_indep_conds(_int_parents,
+                                                   self.selected_variables,
+                                                   _int_sel_links,
+                                                   max_conds_py,
+                                                   max_conds_px)
+        print(full_iter)
+        print(self.time_length*len(full_iter), sum(full_iter))
+        l = 0
+        lenZ = 0
+        Xbig = af.constant(0, self.time_length*len(full_iter), 1)
+        Ybig = af.constant(0, self.time_length*len(full_iter), 1)
+        Zbig = af.constant(0, self.time_length*len(full_iter), sum(full_iter))
+        # Xbig = af.constant(0,1,1)
+        # Ybig = af.constant(0,1,1)
+        # Zbig = af.constant(0,1,1)
+        X_af = af.constant(0.0, self.time_length, 1)
+        Y_af = af.constant(0.0, self.time_length, 1)
+
         # Get the conditions as implied by the input arguments
         for j, i, tau, Z in self._iter_indep_conds(_int_parents,
                                                    self.selected_variables,
@@ -1407,20 +1487,143 @@ class PCMCI():
             X = [(i, tau)]
             Y = [(j, 0)]
             # Run the independence tests and record the results
-            val, pval, array = self.cond_ind_test.run_test(X, Y, Z=Z, tau_max=tau_max)
+            # val, pval, array, xyz = self.cond_ind_test.run_test(X, Y, Z=Z, tau_max=tau_max)
+            array, xyz = self.cond_ind_test.run_mci_test(X, Y, Z=Z, tau_max=tau_max)
+
+            # print(f'{i}, {j}, {tau}, {val}')
+            dim, T = array.shape
+            X_af[:, 0] = af.Array(array[0, :].ctypes.data, array[0, :].T.shape, array[0, :].dtype.char) # has to be standardized for pearson (TODO: do it for X, Y, Z w/o AF)
+            Y_af[:, 0] = af.Array(array[1, :].ctypes.data, array[1, :].T.shape, array[1, :].dtype.char)
+            Z_af = af.Array(array[2:, :].ctypes.data, array[2:, :].T.shape, array[2:, :].dtype.char)
+            # standardize X for pearson
+            X_af -= af.tile(af.mean(X_af, dim=0), X_af.shape[0])
+            normXm = af.norm(X_af)
+            X_af /= normXm
+            # standardize Y for pearson
+            Y_af -= af.tile(af.mean(Y_af, dim=0), Y_af.shape[0])
+            normYm = af.norm(Y_af)
+            Y_af /= normYm
+            # standardize Z for pearson
+            Z_af -= af.tile(af.mean(Z_af, dim=0), Z_af.shape[0])
+            for k in range(len(Z)):
+                normZm = af.norm(Z_af[:,k])
+                Z_af[:,k] /= normZm
+
+            print(f'l, lenZ, Z = {l}, {lenZ}, {Z}')
+            print(f'Xbig.shape = {Xbig.shape}, Xbig[{l*self.time_length} : {(l+1)*self.time_length}] = X_af[{X_af.shape}]')
+            print(f'Ybig.shape = {Ybig.shape}, Ybig[{l*self.time_length} : {(l+1)*self.time_length}] = Y_af[{Y_af.shape}]')
+            print(f'Zbig.shape = {Zbig.shape}, Zbig[{l*self.time_length} : {(l+1)*self.time_length}] = Z_af[{Z_af.shape}]')
+            Xbig[l*self.time_length : (l+1)*self.time_length, 0] = X_af # standard(af.Array(array[0, :].ctypes.data, array[0, :].T.shape, array[0, :].dtype.char))
+            Ybig[l*self.time_length : (l+1)*self.time_length, 0] = Y_af # standard(af.Array(array[1, :].ctypes.data, array[1, :].T.shape, array[1, :].dtype.char))
+            Zbig[l*self.time_length : (l+1)*self.time_length, lenZ : lenZ+len(Z)] = Z_af
+
+            l += 1
+            lenZ += len(Z)
+            # print(f'l, lenZ, Zbig.shape [updated] = {l}, {lenZ}, {Zbig.shape} [{Zbig[-Xbig.dims()[0]:,1:].shape}]')
+
+            # # Check if a confidence type has been defined
+            # if self.cond_ind_test.confidence:
+            #     self.cond_ind_test.confidence.half_conf = self.cond_ind_test.confidence.conf_samples * (1. - self.cond_ind_test.confidence.conf_lev)/2.
+            # (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper) = \
+            #         self.cond_ind_test.get_analytic_confidence(df=T-dim,
+            #                                      value=val,
+            #                                      conf_lev=self.cond_ind_test.conf_lev)
+            # # Cache the confidence interval
+            # self.cond_ind_test.conf = (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper)
+            # # # Return the confidence interval
+            # conf = (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper)
+
+            # val_matrix[i, j, abs(tau)] = val
+            # p_matrix[i, j, abs(tau)] = pval
+            
+            # # Get the confidance value, returns None if cond_ind_test.confidance
+            # # is False
+            # conf = self.cond_ind_test.get_confidence(X, Y, Z=Z, tau_max=tau_max)
+            # # Record the value if the conditional independence requires it
+            # if self.cond_ind_test.confidence:
+            #     conf_matrix[i, j, abs(tau)] = conf
+            # # Print the results if needed
+            # if self.verbosity > 1:
+            #     self.cond_ind_test._print_cond_ind_results(val,
+            #                                                pval=pval,
+            #                                                conf=conf)
+        print(f'Xbig.shape: {Xbig.shape}')
+        print(f'Ybig.shape: {Ybig.shape}')
+        print(f'Zbig.shape: {Zbig.shape}')
+        # print(f'val_matrix: {val_matrix}')
+
+        # Zbig = Zbig[-Xbig.dims()[0]:,1:]
+        # print(Zbig.to_ndarray()[:10])
+        BetaX = af.solve(Zbig, Xbig)
+        # betaX = BetaX.to_ndarray()
+        # print(f'BetaX.shape, Zbig.shape = {BetaX.shape}, {betaX}')
+        BetaY = af.solve(Zbig, Ybig)
+        # betaY = BetaY.to_ndarray()
+        # print(f'betaY = {betaY}')
+        muXbig = af.matmul(Zbig, BetaX)
+        muYbig = af.matmul(Zbig, BetaY)
+        rXbig = Xbig - muXbig
+        rYbig = Ybig - muYbig
+        rXbig = af.moddims(rXbig, self.time_length, rXbig.dims()[0]//self.time_length)
+        rYbig = af.moddims(rYbig, self.time_length, rYbig.dims()[0]//self.time_length)
+        rX = rXbig[0,:].to_ndarray()
+        rY = rYbig[0,:].to_ndarray()
+        # print(f'rXbig.shape = {rXbig.shape}')
+        # print(f'rYbig.shape = {rYbig.shape}')
+        # print(f'rX = {rX}')
+        # print(f'rY = {rY}')
+        Val = stats.pearson_af(rXbig, rYbig)
+        # val2 = Val.to_ndarray()
+        val_list = Val.to_list()
+        # print(f'Val = {val_list}')
+
+        val_iter = iter(val_list)
+        # Get the conditions as implied by the input arguments
+        for j, i, tau, Z in self._iter_indep_conds(_int_parents,
+                                                   self.selected_variables,
+                                                   _int_sel_links,
+                                                   max_conds_py,
+                                                   max_conds_px):
+            T = self.time_length
+            lenZ = len(Z)
+            dim = lenZ + 2
+            val = next(val_iter)
+            # print(f'val = {val}')
+            # Set X and Y (for clarity of code)
+            X = [(i, tau)]
+            Y = [(j, 0)]
+            # Run the independence tests and record the results
+            array, xyz = self.cond_ind_test.run_mci_test(X, Y, Z=Z, tau_max=tau_max)
+            # array, xyz = self.cond_ind_test.run_test(X, Y, Z=Z, tau_max=tau_max)
             val_matrix[i, j, abs(tau)] = val
+
+            # Get the p-value
+            pval = self.cond_ind_test.get_significance(val, array, xyz, T, dim)
+
             p_matrix[i, j, abs(tau)] = pval
-            # Get the confidance value, returns None if cond_ind_test.confidance
-            # is False
-            conf = self.cond_ind_test.get_confidence(X, Y, Z=Z, tau_max=tau_max)
+
+            # Check if a confidence type has been defined
+            if self.cond_ind_test.confidence:
+                self.cond_ind_test.confidence.half_conf = self.cond_ind_test.confidence.conf_samples * (1. - self.cond_ind_test.confidence.conf_lev)/2.
+            (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper) = \
+                    self.cond_ind_test.get_analytic_confidence(df=T-dim,
+                                                 value=val,
+                                                 conf_lev=self.cond_ind_test.conf_lev)
+            # Cache the confidence interval
+            self.cond_ind_test.conf = (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper)
+            # # Return the confidence interval
+            conf = (self.cond_ind_test.conf_lower, self.cond_ind_test.conf_upper)
+
             # Record the value if the conditional independence requires it
             if self.cond_ind_test.confidence:
                 conf_matrix[i, j, abs(tau)] = conf
+
             # Print the results if needed
             if self.verbosity > 1:
                 self.cond_ind_test._print_cond_ind_results(val,
                                                            pval=pval,
                                                            conf=conf)
+
         # Return the values as a dictionary
         return {'val_matrix':val_matrix,
                 'p_matrix':p_matrix,

@@ -348,7 +348,57 @@ class CondIndTest():
         # Get the p-value
         pval = self.get_significance(val, array, xyz, T, dim)
         # Return the value and the pvalue
-        return val, pval, array
+        return val, pval, array, xyz
+
+    def run_mci_test(self, X, Y, Z=None, tau_max=0, cut_off='2xtau_max'):
+        """Perform conditional independence test.
+
+        Calls the dependence measure and signficicance test functions. The child
+        classes must specify a function get_dependence_measure and either or
+        both functions get_analytic_significance and  get_shuffle_significance.
+        If recycle_residuals is True, also _get_single_residuals must be
+        available.
+
+        Parameters
+        ----------
+        X, Y, Z : list of tuples
+            X,Y,Z are of the form [(var, -tau)], where var specifies the
+            variable index and tau the time lag.
+
+        tau_max : int, optional (default: 0)
+            Maximum time lag. This may be used to make sure that estimates for
+            different lags in X, Z, all have the same sample size.
+
+        cut_off : {'2xtau_max', 'max_lag', 'max_lag_or_tau_max'}
+            How many samples to cutoff at the beginning. The default is
+            '2xtau_max', which guarantees that MCI tests are all conducted on
+            the same samples. For modeling, 'max_lag_or_tau_max' can be used,
+            which uses the maximum of tau_max and the conditions, which is
+            useful to compare multiple models on the same sample.  Last,
+            'max_lag' uses as much samples as possible.
+
+        Returns
+        -------
+        val, pval : Tuple of floats
+
+            The test statistic value and the p-value.
+        """
+
+        # Get the array to test on
+        array, xyz, XYZ = self._get_array(X, Y, Z, tau_max, cut_off)
+        X, Y, Z = XYZ
+        # Record the dimensions
+        dim, T = array.shape
+        # Ensure it is a valid array
+        if np.isnan(array).sum() != 0:
+            raise ValueError("nans in the array!")
+        # # Get the dependence measure, reycling residuals if need be
+        # val = self._get_dependence_measure_recycle(X, Y, Z, xyz, array)
+        # # Get the p-value
+        # pval = self.get_significance(val, array, xyz, T, dim)
+        # Return the value and the pvalue
+        # return val, pval, array, xyz
+        return array, xyz
 
     def run_test_raw(self, x, y, z=None):
         """Perform conditional independence test directly on input arrays x, y, z.
@@ -1084,7 +1134,7 @@ class ParCorr(CondIndTest):
             # af_qr = tigramite_stats.lstsq_af(np.fastCopyAndTranspose(R), Qb)
             # af_hat = tigramite_stats.lstsq_af(z0, y)
 
-            print(f'beta({target_var})={beta_hat}')
+            # print(f'beta({target_var})={beta_hat}')
 
             # print(f'COEFFS(QR)={beta_qr}')
             # print(f'COEFFS(AF_QR)={af_qr}')
